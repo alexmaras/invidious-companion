@@ -3,6 +3,10 @@ import type { WebPoSignalOutput } from "bgutils";
 import { JSDOM } from "jsdom";
 import { Innertube, UniversalCache } from "youtubei.js";
 import { Store } from "@willsoto/node-konfig-core";
+import {
+    youtubePlayerParsing,
+    youtubeVideoInfo,
+} from "../helpers/youtubePlayerHandling.ts";
 let getFetchClientLocation = "getFetchClient";
 if (Deno.env.get("GET_FETCH_CLIENT_LOCATION")) {
     if (Deno.env.has("DENO_COMPILED")) {
@@ -29,6 +33,8 @@ export const poTokenGenerate = async (
             retrieve_player: false,
         });
     }
+
+    const fetchImpl = await getFetchClient(konfigStore);
 
     const visitorData = innertubeClient.session.context.client.visitorData;
 
@@ -67,7 +73,7 @@ export const poTokenGenerate = async (
 
     const interpreterUrl = challengeResponse.bg_challenge.interpreter_url
         .private_do_not_access_or_else_trusted_resource_url_wrapped_value;
-    const bgScriptResponse = await getFetchClient(konfigStore)(
+    const bgScriptResponse = await fetchImpl(
         `http:${interpreterUrl}`,
     );
     const interpreterJavascript = await bgScriptResponse.text();
@@ -92,16 +98,19 @@ export const poTokenGenerate = async (
     const botguardResponse = await botguard.snapshot({ webPoSignalOutput });
     const requestKey = "O43z0dpjhgX20SCx4KAo";
 
-    const integrityTokenResponse = await fetch(buildURL("GenerateIT", true), {
-        method: "POST",
-        headers: {
-            "content-type": "application/json+protobuf",
-            "x-goog-api-key": GOOG_API_KEY,
-            "x-user-agent": "grpc-web-javascript/0.1",
-            "user-agent": USER_AGENT,
+    const integrityTokenResponse = await fetchImpl(
+        buildURL("GenerateIT", true),
+        {
+            method: "POST",
+            headers: {
+                "content-type": "application/json+protobuf",
+                "x-goog-api-key": GOOG_API_KEY,
+                "x-user-agent": "grpc-web-javascript/0.1",
+                "user-agent": USER_AGENT,
+            },
+            body: JSON.stringify([requestKey, botguardResponse]),
         },
-        body: JSON.stringify([requestKey, botguardResponse]),
-    });
+    );
 
     const response = await integrityTokenResponse.json() as unknown[];
 
@@ -125,6 +134,48 @@ export const poTokenGenerate = async (
         cache: innertubeClientCache,
         generate_session_locally: true,
     });
+
+    try {
+        const feed = await instantiatedInnertubeClient.getTrending();
+        // get all videos and shuffle them randomly to avoid using the same trending video over and over
+        const videos = feed.videos
+            .filter((video) => video.type === "Video")
+            .map((value) => ({ value, sort: Math.random() }))
+            .sort((a, b) => a.sort - b.sort)
+            .map(({ value }) => value);
+
+        const video = videos.find((video) => "id" in video);
+        if (!video) {
+            throw new Error("no videos with id found in trending");
+        }
+
+        const youtubePlayerResponseJson = await youtubePlayerParsing({
+            innertubeClient: instantiatedInnertubeClient,
+            videoId: video.id,
+            konfigStore,
+            tokenMinter: integrityTokenBasedMinter,
+            overrideCache: true,
+        });
+        const videoInfo = youtubeVideoInfo(
+            instantiatedInnertubeClient,
+            youtubePlayerResponseJson,
+        );
+        const validFormat = videoInfo.streaming_data?.adaptive_formats[0];
+        if (!validFormat) {
+            throw new Error(
+                "failed to find valid video with adaptive format to check token against",
+            );
+        }
+        const result = await fetchImpl(validFormat?.url, { method: "HEAD" });
+        if (result.status !== 200) {
+            throw new Error(
+                `did not get a 200 when checking video, got ${result.status} instead`,
+            );
+        }
+    } catch (err) {
+        console.log("Failed to get valid PO token, will retry", { err });
+        throw err;
+    }
 
     return {
         innertubeClient: instantiatedInnertubeClient,
