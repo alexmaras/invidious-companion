@@ -25,11 +25,11 @@ export const youtubePlayerParsing = async ({
     tokenMinter,
     overrideCache = false,
 }: {
-    innertubeClient: Innertube,
-    videoId: string,
-    konfigStore: Store,
-    tokenMinter: BG.WebPoMinter,
-    overrideCache?: boolean,
+    innertubeClient: Innertube;
+    videoId: string;
+    konfigStore: Store;
+    tokenMinter: BG.WebPoMinter;
+    overrideCache?: boolean;
 }): Promise<object> => {
     const cacheEnabled = konfigStore.get("cache.enabled");
 
@@ -150,7 +150,8 @@ export const youtubePlayerParsing = async ({
         }))(videoData);
 
         if (
-            cacheEnabled && !overrideCache && videoData.playabilityStatus?.status == "OK"
+            cacheEnabled && !overrideCache &&
+            videoData.playabilityStatus?.status == "OK"
         ) {
             (async () => {
                 await kv.set(
