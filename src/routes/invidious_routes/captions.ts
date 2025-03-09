@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import type { HonoVariables } from "../../lib/types/HonoVariables.ts";
-import { Store } from "@willsoto/node-konfig-core";
 import { verifyRequest } from "../../lib/helpers/verifyRequest.ts";
 import { youtubePlayerParsing } from "../../lib/helpers/youtubePlayerHandling.ts";
 import { handleTranscripts } from "../../lib/helpers/youtubeTranscriptsHandling.ts";
@@ -15,9 +14,7 @@ interface AvailableCaption {
 const captionsHandler = new Hono<{ Variables: HonoVariables }>();
 captionsHandler.get("/:videoId", async (c) => {
     const { videoId } = c.req.param();
-    const konfigStore = await c.get("konfigStore") as Store<
-        Record<string, unknown>
-    >;
+    const konfigStore = c.get("konfigStore");
 
     const check = c.req.query("check");
 
@@ -33,13 +30,14 @@ captionsHandler.get("/:videoId", async (c) => {
         }
     }
 
-    const innertubeClient = await c.get("innertubeClient");
+    const innertubeClient = c.get("innertubeClient");
 
-    const playerJson = await youtubePlayerParsing(
+    const playerJson = await youtubePlayerParsing({
         innertubeClient,
         videoId,
         konfigStore,
-    );
+        tokenMinter: c.get("tokenMinter"),
+    });
 
     const captionsTrackArray =
         // @ts-ignore to be fixed
