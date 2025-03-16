@@ -18,7 +18,8 @@
     "youtubePlayerReq": "./src/lib/helpers/youtubePlayerReq.ts",
     "getFetchClient": "./src/lib/helpers/getFetchClient.ts",
     "googlevideo": "jsr:@luanrt/googlevideo@^2.0.0",
-    "jsr:@luanrt/jintr": "jsr:@luanrt/jintr@^3.2.1"
+    "jsr:@luanrt/jintr": "jsr:@luanrt/jintr@^3.2.1",
+    "zod": "https://deno.land/x/zod@v3.24.2/mod.ts"
   },
   "unstable": [
     "cron",
