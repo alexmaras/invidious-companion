@@ -5,5 +5,5 @@ import type { Config } from "../helpers/config.ts";
 export type HonoVariables = {
     innertubeClient: Innertube;
     config: Config;
-    tokenMinter: BG.WebPoMinter;
+    tokenMinter: (videoId: string) => Promise<string>;
 };

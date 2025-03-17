@@ -29,7 +29,7 @@ export const youtubePlayerParsing = async ({
     innertubeClient: Innertube;
     videoId: string;
     config: Config;
-    tokenMinter: BG.WebPoMinter;
+    tokenMinter: (videoId: string) => Promise<string>;
     overrideCache?: boolean;
 }): Promise<object> => {
     const cacheEnabled = overrideCache ? false : config.cache.enabled;

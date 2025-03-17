@@ -8,7 +8,7 @@ export const youtubePlayerReq = async (
     innertubeClient: Innertube,
     videoId: string,
     config: Config,
-    tokenMinter: BG.WebPoMinter,
+    tokenMinter: (videoId: string) => Promise<string>,
 ): Promise<ApiResponse> => {
     const innertubeClientOauthEnabled = config.youtube_session.oauth_enabled;
 
@@ -21,7 +21,7 @@ export const youtubePlayerReq = async (
         watchEndpoint: { videoId: videoId },
     });
 
-    const contentPoToken = await tokenMinter.mintAsWebsafeString(videoId);
+    const contentPoToken = await tokenMinter(videoId);
 
     return watch_endpoint.call(innertubeClient.actions, {
         playbackContext: {
