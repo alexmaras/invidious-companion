@@ -1,7 +1,7 @@
 import { z, ZodError } from "zod";
 import { parse } from "jsr:@std/toml";
 
-const ConfigSchema = z.object({
+export const ConfigSchema = z.object({
     server: z.object({
         port: z.number().default(8282),
         host: z.string().default("127.0.0.1"),

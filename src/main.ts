@@ -35,7 +35,7 @@ declare module "hono" {
 }
 const app = new Hono();
 
-let tokenMinter: BG.WebPoMinter;
+let tokenMinter: (videoId: string) => Promise<string>;
 let innertubeClient: Innertube;
 let innertubeClientFetchPlayer = true;
 const innertubeClientOauthEnabled = config.youtube_session.oauth_enabled;

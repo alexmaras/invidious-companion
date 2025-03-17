@@ -2,6 +2,7 @@ import { BG, buildURL, GOOG_API_KEY, USER_AGENT } from "bgutils";
 import type { WebPoSignalOutput } from "bgutils";
 import { JSDOM } from "jsdom";
 import { Innertube, UniversalCache } from "youtubei.js";
+import { fork } from "node:child_process";
 import {
     youtubePlayerParsing,
     youtubeVideoInfo,
@@ -20,112 +21,94 @@ if (Deno.env.get("GET_FETCH_CLIENT_LOCATION")) {
 }
 const { getFetchClient } = await import(getFetchClientLocation);
 
+
+import { z, ZodError } from "zod";
+
+const InitialisedSchema = z.object({
+    type: z.literal('initialised'),
+    sessionPoToken: z.string(),
+    visitorData: z.string(),
+}).strict();
+
+const ContentTokenSchema = z.object({
+    type: z.literal('content-token'),
+    contentToken: z.string(),
+}).strict();
+
+const MessageSchema = InitialisedSchema.or(ContentTokenSchema);
+
+export type Message = z.infer<typeof MessageSchema>;
+
+const forked: ReturnType<typeof fork>[] = [];
+
 // Adapted from https://github.com/LuanRT/BgUtils/blob/main/examples/node/index.ts
 export const poTokenGenerate = async (
     innertubeClient: Innertube,
     config: Config,
     innertubeClientCache: UniversalCache,
-): Promise<{ innertubeClient: Innertube; tokenMinter: BG.WebPoMinter }> => {
-    if (innertubeClient.session.po_token) {
-        innertubeClient = await Innertube.create({
-            enable_session_cache: false,
-            user_agent: USER_AGENT,
-            retrieve_player: false,
+): Promise<{ innertubeClient: Innertube; tokenMinter: (videoId: string) => Promise<string> }> => {
+    return new Promise((resolve) => {
+        const forkLocation = Deno.mainModule.replace('file://', '').replace('main.ts', '') + 'lib/jobs/fork.ts';
+        console.log({ forkLocation });
+        try {
+        const forkedCode = fork(forkLocation);
+        console.log("SENDING CONFIG");
+        forkedCode.send({ type: 'config', config });
+        console.log("pushing onto array");
+        forked.push(forkedCode);
+        console.log("making minter");
+        const minter = (videoId: string): Promise<string> => {
+            return new Promise((resolve) => {
+                forkedCode.send({ type: 'content-token-request', videoId });
+                forkedCode.on('message', (message) => {
+                    const parsedMessage = MessageSchema.parse(message);
+                    if (parsedMessage.type === 'content-token') {
+                        console.log({ parsedMessage });
+                        resolve(parsedMessage.contentToken);
+                    }
+                });
+            });
+        }
+        forkedCode.on('message', (message) => {
+            try {
+            const parsedMessage = MessageSchema.parse(message);
+
+            if (parsedMessage.type === 'initialised') {
+                for (let i = 0; i < forked.length - 1; i++) {
+                    console.log("KILLING:", { forked });
+                    forked.shift()?.kill()
+                }
+                resolve(initialiseStuff({
+                    sessionPoToken: parsedMessage.sessionPoToken,
+                    visitorData: parsedMessage.visitorData,
+                    config,
+                    innertubeClientCache,
+                    integrityTokenBasedMinter: minter
+                }));
+            }
+            } catch (err) {
+                console.log({ err });
+            }
         });
-    }
-
-    const fetchImpl = await getFetchClient(config);
-
-    const visitorData = innertubeClient.session.context.client.visitorData;
-
-    if (!visitorData) {
-        throw new Error("Could not get visitor data");
-    }
-
-    const dom = new JSDOM(
-        '<!DOCTYPE html><html lang="en"><head><title></title></head><body></body></html>',
-        {
-            url: "https://www.youtube.com/",
-            referrer: "https://www.youtube.com/",
-            userAgent: USER_AGENT,
-        },
-    );
-
-    Object.assign(globalThis, {
-        window: dom.window,
-        document: dom.window.document,
-        location: dom.window.location,
-        origin: dom.window.origin,
+        } catch (err) {
+            console.log({ err });
+        }
     });
+};
 
-    if (!Reflect.has(globalThis, "navigator")) {
-        Object.defineProperty(globalThis, "navigator", {
-            value: dom.window.navigator,
-        });
-    }
-
-    const challengeResponse = await innertubeClient.getAttestationChallenge(
-        "ENGAGEMENT_TYPE_UNBOUND",
-    );
-    if (!challengeResponse.bg_challenge) {
-        throw new Error("Could not get challenge");
-    }
-
-    const interpreterUrl = challengeResponse.bg_challenge.interpreter_url
-        .private_do_not_access_or_else_trusted_resource_url_wrapped_value;
-    const bgScriptResponse = await fetchImpl(
-        `http:${interpreterUrl}`,
-    );
-    const interpreterJavascript = await bgScriptResponse.text();
-
-    if (interpreterJavascript) {
-        new Function(interpreterJavascript)();
-    } else throw new Error("Could not load VM");
-
-    // Botguard currently surfaces a "Not implemented" error here, due to the environment
-    // not having a valid Canvas API in JSDOM. At the time of writing, this doesn't cause
-    // any issues as the Canvas check doesn't appear to be an enforced element of the checks
-    console.log(
-        '[INFO] the "Not implemented: HTMLCanvasElement.prototype.getContext" error is normal. Please do not open a bug report about it.',
-    );
-    const botguard = await BG.BotGuardClient.create({
-        program: challengeResponse.bg_challenge.program,
-        globalName: challengeResponse.bg_challenge.global_name,
-        globalObj: globalThis,
-    });
-
-    const webPoSignalOutput: WebPoSignalOutput = [];
-    const botguardResponse = await botguard.snapshot({ webPoSignalOutput });
-    const requestKey = "O43z0dpjhgX20SCx4KAo";
-
-    const integrityTokenResponse = await fetchImpl(
-        buildURL("GenerateIT", true),
-        {
-            method: "POST",
-            headers: {
-                "content-type": "application/json+protobuf",
-                "x-goog-api-key": GOOG_API_KEY,
-                "x-user-agent": "grpc-web-javascript/0.1",
-                "user-agent": USER_AGENT,
-            },
-            body: JSON.stringify([requestKey, botguardResponse]),
-        },
-    );
-
-    const response = await integrityTokenResponse.json() as unknown[];
-
-    if (typeof response[0] !== "string") {
-        throw new Error("Could not get integrity token");
-    }
-
-    const integrityTokenBasedMinter = await BG.WebPoMinter.create({
-        integrityToken: response[0],
-    }, webPoSignalOutput);
-
-    const sessionPoToken = await integrityTokenBasedMinter.mintAsWebsafeString(
-        visitorData,
-    );
-
+async function initialiseStuff({
+    sessionPoToken,
+    visitorData,
+    config,
+    innertubeClientCache,
+    integrityTokenBasedMinter,
+}: {
+    sessionPoToken: string,
+    visitorData: string,
+    config: Config,
+    innertubeClientCache: UniversalCache,
+    integrityTokenBasedMinter: (videoId: string) => Promise<string>,
+}) {
     const instantiatedInnertubeClient = await Innertube.create({
         enable_session_cache: false,
         po_token: sessionPoToken,
@@ -134,6 +117,7 @@ export const poTokenGenerate = async (
         cache: innertubeClientCache,
         generate_session_locally: true,
     });
+    const fetchImpl = await getFetchClient(config);
 
     try {
         const feed = await instantiatedInnertubeClient.getTrending();
@@ -181,4 +165,4 @@ export const poTokenGenerate = async (
         innertubeClient: instantiatedInnertubeClient,
         tokenMinter: integrityTokenBasedMinter,
     };
-};
+}
