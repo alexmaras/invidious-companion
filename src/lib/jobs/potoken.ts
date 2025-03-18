@@ -100,6 +100,7 @@ export const poTokenGenerate = (
                 integrityTokenBasedMinter: minter,
             }).catch((err) => {
                 console.log("Token was bad, retrying", { err });
+                worker.terminate()
                 reject(err);
             });
             console.log("Successfully generated PO token");
