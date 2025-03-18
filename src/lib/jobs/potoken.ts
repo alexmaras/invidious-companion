@@ -91,36 +91,38 @@ export const poTokenGenerate = (
 
         // worker is initialised and has passed back a session token and visitor data
         if (parsedMessage.type === "initialised") {
-            const instantiatedInnertubeClient = await Innertube.create({
-                enable_session_cache: false,
-                po_token: parsedMessage.sessionPoToken,
-                visitor_data: parsedMessage.visitorData,
-                fetch: getFetchClient(config),
-                cache: innertubeClientCache,
-                generate_session_locally: true,
-            });
-            const minter = createMinter(worker);
-            // check token from minter
-            await checkToken({
-                instantiatedInnertubeClient,
-                config,
-                integrityTokenBasedMinter: minter,
-            }).catch((err) => {
-                console.log("Token was bad, retrying", { err });
+            try {
+                const instantiatedInnertubeClient = await Innertube.create({
+                    enable_session_cache: false,
+                    po_token: parsedMessage.sessionPoToken,
+                    visitor_data: parsedMessage.visitorData,
+                    fetch: getFetchClient(config),
+                    cache: innertubeClientCache,
+                    generate_session_locally: true,
+                });
+                const minter = createMinter(worker);
+                // check token from minter
+                await checkToken({
+                    instantiatedInnertubeClient,
+                    config,
+                    integrityTokenBasedMinter: minter,
+                });
+                console.log("Successfully generated PO token");
+                for (let i = 0; i < workers.length - 1; i++) {
+                    const workerToKill = workers.shift();
+                    console.log("KILLING:", { workerToKill });
+                    workerToKill?.terminate();
+                }
+                console.log("Remaining workers", workers);
+                return resolve({
+                    innertubeClient: instantiatedInnertubeClient,
+                    tokenMinter: minter,
+                });
+            } catch (err) {
+                console.log('Failed to get valid PO token, will retry', { err })
                 worker.terminate();
-                return reject(err);
-            });
-            console.log("Successfully generated PO token");
-            for (let i = 0; i < workers.length - 1; i++) {
-                const workerToKill = workers.shift();
-                console.log("KILLING:", { workerToKill });
-                workerToKill?.terminate();
+                reject(err);
             }
-            console.log("Remaining workers", workers);
-            return resolve({
-                innertubeClient: instantiatedInnertubeClient,
-                tokenMinter: minter,
-            });
         }
     });
 
