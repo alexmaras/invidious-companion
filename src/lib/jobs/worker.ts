@@ -51,8 +51,13 @@ const OutputContentTokenSchema = z.object({
     contentToken: z.string(),
     requestId: InputContentTokenSchema.shape.requestId,
 }).strict();
+
+const OutputErrorSchema = z.object({
+    type: z.literal("error"),
+    error: z.any()
+}).strict();
 export const OutputMessageSchema = OutputReadySchema.or(OutputInitialiseSchema)
-    .or(OutputContentTokenSchema);
+    .or(OutputContentTokenSchema).or(OutputErrorSchema);
 type OutputMessage = z.infer<typeof OutputMessageSchema>;
 
 const isWorker = typeof WorkerGlobalScope !== "undefined" &&
@@ -70,13 +75,17 @@ if (isWorker) {
         const message = InputMessageSchema.parse(event.data);
         if (message.type === "initialise") {
             const fetchImpl = await getFetchClient(message.config);
-            const {
-                sessionPoToken,
-                visitorData,
-                generatedMinter,
-            } = await setup({ fetchImpl });
-            minter = generatedMinter;
-            postMessage({ type: "initialised", sessionPoToken, visitorData });
+            try {
+                const {
+                    sessionPoToken,
+                    visitorData,
+                    generatedMinter,
+                } = await setup({ fetchImpl })
+                minter = generatedMinter;
+                postMessage({ type: "initialised", sessionPoToken, visitorData });
+            } catch (err) {
+                postMessage({ type: "error", error: err });
+            }
         }
         // this is called every time a video needs a content token
         if (message.type === "content-token-request") {

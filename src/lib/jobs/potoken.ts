@@ -84,6 +84,11 @@ export const poTokenGenerate = (
             worker.postMessage({ type: "initialise", config });
         }
 
+        if (parsedMessage.type === "error") {
+            worker.terminate();
+            reject(parsedMessage.error);
+        }
+
         // worker is initialised and has passed back a session token and visitor data
         if (parsedMessage.type === "initialised") {
             const instantiatedInnertubeClient = await Innertube.create({
@@ -103,7 +108,7 @@ export const poTokenGenerate = (
             }).catch((err) => {
                 console.log("Token was bad, retrying", { err });
                 worker.terminate();
-                reject(err);
+                return reject(err);
             });
             console.log("Successfully generated PO token");
             for (let i = 0; i < workers.length - 1; i++) {
@@ -112,7 +117,7 @@ export const poTokenGenerate = (
                 workerToKill?.terminate();
             }
             console.log("Remaining workers", workers);
-            resolve({
+            return resolve({
                 innertubeClient: instantiatedInnertubeClient,
                 tokenMinter: minter,
             });
@@ -129,7 +134,7 @@ async function checkToken({
 }: {
     instantiatedInnertubeClient: Innertube;
     config: Config;
-    integrityTokenBasedMinter: (videoId: string) => Promise<string>;
+    integrityTokenBasedMinter: TokenMinter;
 }) {
     const fetchImpl = getFetchClient(config);
 
