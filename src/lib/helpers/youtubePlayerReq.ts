@@ -1,6 +1,6 @@
 import { ApiResponse, Innertube } from "youtubei.js";
 import NavigationEndpoint from "youtubei.js/NavigationEndpoint";
-import type { BG } from "bgutils";
+import type { TokenMinter } from "../jobs/potoken.ts";
 
 import type { Config } from "./config.ts";
 
@@ -8,7 +8,7 @@ export const youtubePlayerReq = async (
     innertubeClient: Innertube,
     videoId: string,
     config: Config,
-    tokenMinter: (videoId: string) => Promise<string>,
+    tokenMinter: TokenMinter,
 ): Promise<ApiResponse> => {
     const innertubeClientOauthEnabled = config.youtube_session.oauth_enabled;
 
