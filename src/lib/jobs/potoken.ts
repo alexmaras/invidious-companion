@@ -32,11 +32,6 @@ function createMinter(worker: TokenGeneratorWorker) {
         // may be made within a timespan, and this function will be
         // informed about all of them until it's got its own
         const requestId = crypto.randomUUID();
-        worker.postMessage({
-            type: "content-token-request",
-            videoId,
-            requestId,
-        });
         const listener = (message: MessageEvent) => {
             const parsedMessage = OutputMessageSchema.parse(message.data);
             if (
@@ -48,6 +43,11 @@ function createMinter(worker: TokenGeneratorWorker) {
             }
         };
         worker.addEventListener("message", listener);
+        worker.postMessage({
+            type: "content-token-request",
+            videoId,
+            requestId,
+        });
 
         return promise;
     };
