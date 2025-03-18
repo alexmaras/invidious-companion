@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { routes } from "./routes/index.ts";
 import { Innertube, UniversalCache } from "youtubei.js";
-import { type TokenMinter, poTokenGenerate } from "./lib/jobs/potoken.ts";
+import { poTokenGenerate, type TokenMinter } from "./lib/jobs/potoken.ts";
 import { USER_AGENT } from "bgutils";
 import { retry } from "jsr:@std/async";
 import type { HonoVariables } from "./lib/types/HonoVariables.ts";
