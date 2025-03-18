@@ -1,11 +1,11 @@
-import process from 'node:process';
+/// <reference lib="webworker" />
 
-import { z, ZodType, ZodError } from "zod";
-import { Config, ConfigSchema } from "../helpers/config.ts";
+import { z } from "zod";
+import { ConfigSchema } from "../helpers/config.ts";
 import { BG, buildURL, GOOG_API_KEY, USER_AGENT } from "bgutils";
 import type { WebPoSignalOutput } from "bgutils";
 import { JSDOM } from "jsdom";
-import { Innertube, UniversalCache } from "youtubei.js";
+import { Innertube } from "youtubei.js";
 let getFetchClientLocation = "getFetchClient";
 if (Deno.env.get("GET_FETCH_CLIENT_LOCATION")) {
     if (Deno.env.has("DENO_COMPILED")) {
@@ -19,52 +19,92 @@ if (Deno.env.get("GET_FETCH_CLIENT_LOCATION")) {
 }
 const { getFetchClient } = await import(getFetchClientLocation);
 
-const innertubeClient = await Innertube.create({
-    enable_session_cache: false,
-    user_agent: USER_AGENT,
-    retrieve_player: false,
-});
-
-const InitialisedSchema = z.object({
-    type: z.literal('config'),
+// ---- Messages to send to the webworker ----
+const InputInitialiseSchema = z.object({
+    type: z.literal("initialise"),
     config: ConfigSchema,
 }).strict();
 
-const ContentTokenSchema = z.object({
-    type: z.literal('content-token-request'),
+const InputContentTokenSchema = z.object({
+    type: z.literal("content-token-request"),
     videoId: z.string(),
+    requestId: z.string().uuid(),
+}).strict();
+export type InputInitialise = z.infer<typeof InputInitialiseSchema>;
+export type InputContentToken = z.infer<typeof InputContentTokenSchema>;
+const InputMessageSchema = InputInitialiseSchema.or(InputContentTokenSchema);
+export type InputMessage = z.infer<typeof InputMessageSchema>;
+
+// ---- Messages that the webworker sends to the parent ----
+const OutputReadySchema = z.object({
+    type: z.literal("ready"),
 }).strict();
 
-const MessageSchema = InitialisedSchema.or(ContentTokenSchema);
+const OutputInitialiseSchema = z.object({
+    type: z.literal("initialised"),
+    sessionPoToken: z.string(),
+    visitorData: z.string(),
+}).strict();
 
-export type Message = z.infer<typeof MessageSchema>;
+const OutputContentTokenSchema = z.object({
+    type: z.literal("content-token"),
+    contentToken: z.string(),
+    requestId: InputContentTokenSchema.shape.requestId,
+}).strict();
+export const OutputMessageSchema = OutputReadySchema.or(OutputInitialiseSchema)
+    .or(OutputContentTokenSchema);
+type OutputMessage = z.infer<typeof OutputMessageSchema>;
 
-let minter: BG.WebPoMinter;
+const isWorker = typeof WorkerGlobalScope !== "undefined" &&
+    self instanceof WorkerGlobalScope;
+if (isWorker) {
+    // helper function to force type-checking
+    const untypedPostmessage = self.postMessage.bind(self);
+    const postMessage = (message: OutputMessage) => {
+        untypedPostmessage(message);
+    };
 
+    let minter: BG.WebPoMinter;
 
-process.on('message', (message: Message) => {
-    if (message.type === 'config') {
-        runShit({ config: message.config }).then((returnedMinter) => { minter = returnedMinter });
-    }
-    if (message.type === 'content-token-request') {
-        if (!minter) {
-            throw new Error("Minter not yet ready");
+    onmessage = async (event) => {
+        const message = InputMessageSchema.parse(event.data);
+        if (message.type === "initialise") {
+            const fetchImpl = await getFetchClient(message.config);
+            const {
+                sessionPoToken,
+                visitorData,
+                generatedMinter
+            } = await setup({ fetchImpl });
+            minter = generatedMinter;
+            postMessage({ type: "initialised", sessionPoToken, visitorData });
         }
-        minter.mintAsWebsafeString(message.videoId).then((contentToken) => {
-            if (!process.send) {
-                throw new Error('Not run as child process')
+        // this is called every time a video needs a content token
+        if (message.type === "content-token-request") {
+            if (!minter) {
+                throw new Error(
+                    "Minter not yet ready, must initialise first",
+                );
             }
-            process.send({ type: 'content-token', contentToken })
-        });
-    }
-});
+            const contentToken = await minter.mintAsWebsafeString(
+                message.videoId,
+            );
+            postMessage({
+                type: "content-token",
+                contentToken,
+                requestId: message.requestId,
+            });
+        }
+    };
 
-async function runShit({ config }: { config: Config }) {
-    if (!process.send) {
-        throw new Error('Not run as child process')
-    }
+    postMessage({ type: "ready" });
+}
 
-    const fetchImpl = await getFetchClient(config);
+async function setup({ fetchImpl }: { fetchImpl: ReturnType<typeof getFetchClient> }) {
+    const innertubeClient = await Innertube.create({
+        enable_session_cache: false,
+        user_agent: USER_AGENT,
+        retrieve_player: false,
+    });
 
     const visitorData = innertubeClient.session.context.client.visitorData;
 
@@ -84,7 +124,7 @@ async function runShit({ config }: { config: Config }) {
     Object.assign(globalThis, {
         window: dom.window,
         document: dom.window.document,
-        location: dom.window.location,
+        // location: dom.window.location, // --- doesn't seem to be necessary and the Web Worker doesn't like it
         origin: dom.window.origin,
     });
 
@@ -102,7 +142,7 @@ async function runShit({ config }: { config: Config }) {
     }
 
     const interpreterUrl = challengeResponse.bg_challenge.interpreter_url
-    .private_do_not_access_or_else_trusted_resource_url_wrapped_value;
+        .private_do_not_access_or_else_trusted_resource_url_wrapped_value;
     const bgScriptResponse = await fetchImpl(
         `http:${interpreterUrl}`,
     );
@@ -126,10 +166,7 @@ async function runShit({ config }: { config: Config }) {
 
     const webPoSignalOutput: WebPoSignalOutput = [];
     const botguardResponse = await botguard.snapshot({ webPoSignalOutput });
-    console.log({ botguardResponse, webPoSignalOutput });
     const requestKey = "O43z0dpjhgX20SCx4KAo";
-
-    console.log(webPoSignalOutput[0]?.toString());
 
     const integrityTokenResponse = await fetchImpl(
         buildURL("GenerateIT", true),
@@ -144,7 +181,6 @@ async function runShit({ config }: { config: Config }) {
             body: JSON.stringify([requestKey, botguardResponse]),
         },
     );
-
     const response = await integrityTokenResponse.json() as unknown[];
 
     if (typeof response[0] !== "string") {
@@ -159,7 +195,9 @@ async function runShit({ config }: { config: Config }) {
         visitorData,
     );
 
-    process.send({ type: 'initialised', sessionPoToken, visitorData });
-
-    return integrityTokenBasedMinter;
+    return {
+        sessionPoToken,
+        visitorData,
+        generatedMinter: integrityTokenBasedMinter,
+    };
 }

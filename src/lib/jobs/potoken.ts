@@ -1,8 +1,4 @@
-import { BG, buildURL, GOOG_API_KEY, USER_AGENT } from "bgutils";
-import type { WebPoSignalOutput } from "bgutils";
-import { JSDOM } from "jsdom";
 import { Innertube, UniversalCache } from "youtubei.js";
-import { fork } from "node:child_process";
 import {
     youtubePlayerParsing,
     youtubeVideoInfo,
@@ -21,103 +17,118 @@ if (Deno.env.get("GET_FETCH_CLIENT_LOCATION")) {
 }
 const { getFetchClient } = await import(getFetchClientLocation);
 
+import { InputMessage, OutputMessageSchema } from "./worker.ts";
 
-import { z, ZodError } from "zod";
+interface TokenGeneratorWorker extends Omit<Worker, "postMessage"> {
+    postMessage(message: InputMessage): void;
+}
 
-const InitialisedSchema = z.object({
-    type: z.literal('initialised'),
-    sessionPoToken: z.string(),
-    visitorData: z.string(),
-}).strict();
+const workers: TokenGeneratorWorker[] = [];
 
-const ContentTokenSchema = z.object({
-    type: z.literal('content-token'),
-    contentToken: z.string(),
-}).strict();
+function createMinter(worker: TokenGeneratorWorker) {
+    return (videoId: string): Promise<string> => {
+        const { promise, resolve } = Promise.withResolvers<string>();
+        // generate a UUID to identify the request as many minter calls
+        // may be made within a timespan, and this function will be
+        // informed about all of them until it's got its own
+        const requestId = crypto.randomUUID();
+        worker.postMessage({
+            type: "content-token-request",
+            videoId,
+            requestId,
+        });
+        const listener = (message: MessageEvent) => {
+            const parsedMessage = OutputMessageSchema.parse(message.data);
+            if (
+                parsedMessage.type === "content-token" &&
+                parsedMessage.requestId === requestId
+            ) {
+                worker.removeEventListener('message', listener);
+                resolve(parsedMessage.contentToken);
+            }
+        }
+        worker.addEventListener('message', listener);
 
-const MessageSchema = InitialisedSchema.or(ContentTokenSchema);
+        return promise;
+    };
+}
 
-export type Message = z.infer<typeof MessageSchema>;
-
-const forked: ReturnType<typeof fork>[] = [];
+export type TokenMinter = ReturnType<typeof createMinter>;
 
 // Adapted from https://github.com/LuanRT/BgUtils/blob/main/examples/node/index.ts
-export const poTokenGenerate = async (
-    innertubeClient: Innertube,
+export const poTokenGenerate = (
     config: Config,
     innertubeClientCache: UniversalCache,
-): Promise<{ innertubeClient: Innertube; tokenMinter: (videoId: string) => Promise<string> }> => {
-    return new Promise((resolve) => {
-        const forkLocation = Deno.mainModule.replace('file://', '').replace('main.ts', '') + 'lib/jobs/fork.ts';
-        console.log({ forkLocation });
-        try {
-        const forkedCode = fork(forkLocation);
-        console.log("SENDING CONFIG");
-        forkedCode.send({ type: 'config', config });
-        console.log("pushing onto array");
-        forked.push(forkedCode);
-        console.log("making minter");
-        const minter = (videoId: string): Promise<string> => {
-            return new Promise((resolve) => {
-                forkedCode.send({ type: 'content-token-request', videoId });
-                forkedCode.on('message', (message) => {
-                    const parsedMessage = MessageSchema.parse(message);
-                    if (parsedMessage.type === 'content-token') {
-                        console.log({ parsedMessage });
-                        resolve(parsedMessage.contentToken);
-                    }
-                });
+): Promise<{ innertubeClient: Innertube; tokenMinter: TokenMinter }> => {
+    const { promise, resolve, reject } = Promise.withResolvers<Awaited<ReturnType<typeof poTokenGenerate>>>();
+
+    const worker: TokenGeneratorWorker = new Worker(
+        new URL("./worker.ts", import.meta.url).href,
+        {
+            type: "module",
+            name: "PO Token Generator",
+        },
+    );
+    // take note of the worker so we can kill it once a new one takes its place
+    workers.push(worker);
+    worker.addEventListener("message", async (event) => {
+        const parsedMessage = OutputMessageSchema.parse(event.data);
+
+        // worker is listening for messages
+        if (parsedMessage.type === "ready") {
+            const untypedPostMessage = worker.postMessage.bind(worker);
+            worker.postMessage = (message: InputMessage) =>
+            untypedPostMessage(message);
+            worker.postMessage({ type: "initialise", config });
+        }
+
+        // worker is initialised and has passed back a session token and visitor data
+        if (parsedMessage.type === "initialised") {
+            const instantiatedInnertubeClient = await Innertube.create({
+                enable_session_cache: false,
+                po_token: parsedMessage.sessionPoToken,
+                visitor_data: parsedMessage.visitorData,
+                fetch: getFetchClient(config),
+                cache: innertubeClientCache,
+                generate_session_locally: true,
+            });
+            const minter = createMinter(worker);
+            // check token from minter
+            await checkToken({
+                instantiatedInnertubeClient,
+                config,
+                integrityTokenBasedMinter: minter,
+            }).catch((err) => {
+                console.log("Token was bad, retrying", { err });
+                reject(err);
+            });
+            console.log("Successfully generated PO token");
+            for (let i = 0; i < workers.length - 1; i++) {
+                const workerToKill = workers.shift();
+                console.log("KILLING:", { workerToKill });
+                workerToKill?.terminate();
+            }
+            console.log("Remaining workers", workers);
+            resolve({
+                innertubeClient: instantiatedInnertubeClient,
+                tokenMinter: minter,
             });
         }
-        forkedCode.on('message', (message) => {
-            try {
-            const parsedMessage = MessageSchema.parse(message);
-
-            if (parsedMessage.type === 'initialised') {
-                for (let i = 0; i < forked.length - 1; i++) {
-                    console.log("KILLING:", { forked });
-                    forked.shift()?.kill()
-                }
-                resolve(initialiseStuff({
-                    sessionPoToken: parsedMessage.sessionPoToken,
-                    visitorData: parsedMessage.visitorData,
-                    config,
-                    innertubeClientCache,
-                    integrityTokenBasedMinter: minter
-                }));
-            }
-            } catch (err) {
-                console.log({ err });
-            }
-        });
-        } catch (err) {
-            console.log({ err });
-        }
     });
+
+    return promise;
 };
 
-async function initialiseStuff({
-    sessionPoToken,
-    visitorData,
+async function checkToken({
+    instantiatedInnertubeClient,
     config,
-    innertubeClientCache,
     integrityTokenBasedMinter,
 }: {
-    sessionPoToken: string,
-    visitorData: string,
-    config: Config,
-    innertubeClientCache: UniversalCache,
-    integrityTokenBasedMinter: (videoId: string) => Promise<string>,
+    instantiatedInnertubeClient: Innertube;
+    config: Config;
+    integrityTokenBasedMinter: (videoId: string) => Promise<string>;
 }) {
-    const instantiatedInnertubeClient = await Innertube.create({
-        enable_session_cache: false,
-        po_token: sessionPoToken,
-        visitor_data: visitorData,
-        fetch: getFetchClient(config),
-        cache: innertubeClientCache,
-        generate_session_locally: true,
-    });
-    const fetchImpl = await getFetchClient(config);
+    const fetchImpl = getFetchClient(config);
 
     try {
         const feed = await instantiatedInnertubeClient.getTrending();
@@ -160,9 +171,4 @@ async function initialiseStuff({
         console.log("Failed to get valid PO token, will retry", { err });
         throw err;
     }
-
-    return {
-        innertubeClient: instantiatedInnertubeClient,
-        tokenMinter: integrityTokenBasedMinter,
-    };
 }
