@@ -29,7 +29,7 @@ const app = new Hono();
 
 setInterval(() => {
     Deno.memoryUsage();
-    console.log("heapUsed: ", Deno.memoryUsage().heapUsed / 1_000_000);
+    console.log("[MAIN] heapUsed: ", Deno.memoryUsage().heapUsed / 1_000_000);
 }, 1_000);
 
 let tokenMinter: TokenMinter;

@@ -97,6 +97,11 @@ if (isWorker) {
     };
 
     postMessage({ type: "ready" });
+
+    setInterval(() => {
+        Deno.memoryUsage();
+        console.log("[WORKER] heapUsed: ", Deno.memoryUsage().heapUsed / 1_000_000);
+    }, 1_000);
 }
 
 async function setup({ fetchImpl }: { fetchImpl: ReturnType<typeof getFetchClient> }) {
