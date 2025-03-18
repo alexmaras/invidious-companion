@@ -73,7 +73,7 @@ if (isWorker) {
             const {
                 sessionPoToken,
                 visitorData,
-                generatedMinter
+                generatedMinter,
             } = await setup({ fetchImpl });
             minter = generatedMinter;
             postMessage({ type: "initialised", sessionPoToken, visitorData });
@@ -100,11 +100,16 @@ if (isWorker) {
 
     setInterval(() => {
         Deno.memoryUsage();
-        console.log("[WORKER] heapUsed: ", Deno.memoryUsage().heapUsed / 1_000_000);
+        console.log(
+            "[WORKER] heapUsed: ",
+            Deno.memoryUsage().heapUsed / 1_000_000,
+        );
     }, 1_000);
 }
 
-async function setup({ fetchImpl }: { fetchImpl: ReturnType<typeof getFetchClient> }) {
+async function setup(
+    { fetchImpl }: { fetchImpl: ReturnType<typeof getFetchClient> },
+) {
     const innertubeClient = await Innertube.create({
         enable_session_cache: false,
         user_agent: USER_AGENT,

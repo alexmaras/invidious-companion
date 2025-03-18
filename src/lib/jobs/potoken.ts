@@ -43,11 +43,11 @@ function createMinter(worker: TokenGeneratorWorker) {
                 parsedMessage.type === "content-token" &&
                 parsedMessage.requestId === requestId
             ) {
-                worker.removeEventListener('message', listener);
+                worker.removeEventListener("message", listener);
                 resolve(parsedMessage.contentToken);
             }
-        }
-        worker.addEventListener('message', listener);
+        };
+        worker.addEventListener("message", listener);
 
         return promise;
     };
@@ -60,7 +60,9 @@ export const poTokenGenerate = (
     config: Config,
     innertubeClientCache: UniversalCache,
 ): Promise<{ innertubeClient: Innertube; tokenMinter: TokenMinter }> => {
-    const { promise, resolve, reject } = Promise.withResolvers<Awaited<ReturnType<typeof poTokenGenerate>>>();
+    const { promise, resolve, reject } = Promise.withResolvers<
+        Awaited<ReturnType<typeof poTokenGenerate>>
+    >();
 
     const worker: TokenGeneratorWorker = new Worker(
         new URL("./worker.ts", import.meta.url).href,
@@ -78,7 +80,7 @@ export const poTokenGenerate = (
         if (parsedMessage.type === "ready") {
             const untypedPostMessage = worker.postMessage.bind(worker);
             worker.postMessage = (message: InputMessage) =>
-            untypedPostMessage(message);
+                untypedPostMessage(message);
             worker.postMessage({ type: "initialise", config });
         }
 
@@ -100,7 +102,7 @@ export const poTokenGenerate = (
                 integrityTokenBasedMinter: minter,
             }).catch((err) => {
                 console.log("Token was bad, retrying", { err });
-                worker.terminate()
+                worker.terminate();
                 reject(err);
             });
             console.log("Successfully generated PO token");
