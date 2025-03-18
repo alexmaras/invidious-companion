@@ -108,7 +108,8 @@ export const poTokenGenerate = (
                     integrityTokenBasedMinter: minter,
                 });
                 console.log("Successfully generated PO token");
-                for (let i = 0; i < workers.length - 1; i++) {
+                const numberToKill = workers.length - 1;
+                for (let i = 0; i < numberToKill; i++) {
                     const workerToKill = workers.shift();
                     console.log("KILLING:", { workerToKill });
                     workerToKill?.terminate();
